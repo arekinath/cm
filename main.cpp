@@ -189,19 +189,20 @@ int main(int argc, char *argv[])
 					}
 				}
 				
-				QDBusPendingReply<QVariantMap> repl = svc.GetProperties();
+				/*QDBusPendingReply<QVariantMap> repl = svc.GetProperties();
 				repl.waitForFinished();
-				QVariantMap props = repl.value();
+				QVariantMap props = repl.value();*/
 				
-				QVariantMap ipv4 = argVarConvert<QVariantMap>(props.value("IPv4.Configuration"));
+				QVariantMap ipv4; //  = argVarConvert<QVariantMap>(props.value("IPv4.Configuration"));
 				ipv4.insert("Method", QVariant(method));
+				
 				if (!ips[0].isEmpty())
 					ipv4.insert("Address", QVariant(ips[0]));
 				if (!ips[1].isEmpty())
 					ipv4.insert("Netmask", QVariant(ips[1]));
 				if (!ips[2].isEmpty())
 					ipv4.insert("Gateway", QVariant(ips[2]));
-					
+
 				QDBusPendingReply<> rep = svc.SetProperty("IPv4.Configuration", QDBusVariant(ipv4));
 				rep.waitForFinished();
 				if (rep.isError()) {
