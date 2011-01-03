@@ -73,6 +73,27 @@ void printService(const QString &path)
 	std::cout << "\n";
 }
 
+QString cidrMask(const QString &sbits)
+{
+	bool ok;
+	int bits = sbits.toInt(&ok, 10);
+	if (!ok || bits < 1 || bits > 31) {
+		std::cerr << "cm: could not process CIDR-style mask\n";
+		exit(1);
+	}
+	
+	quint32 mask = 0xffffffff;
+	mask = mask << (32 - bits);
+	
+	QStringList octets;
+	octets.append(QString::number((mask & 0xff000000) >> 24));
+	octets.append(QString::number((mask & 0x00ff0000) >> 16));
+	octets.append(QString::number((mask & 0x0000ff00) >> 8));
+	octets.append(QString::number( mask & 0x000000ff));
+	
+	return octets.join(".");
+}
+
 int main(int argc, char *argv[])
 {
   QCoreApplication a(argc, argv);
@@ -108,12 +129,16 @@ int main(int argc, char *argv[])
 			QString op(argv[2]);
 			op = op.toLower();
 			
+			QRegExp ipAddr("[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}");
+			QRegExp cidr("([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})/([0-9]+)");
+			
 			if (op == "up" || op == "connect") {
 				QDBusPendingReply<> crep = svc.Connect();
 				crep.waitForFinished();
 				
 				if (crep.isError()) {
-					std::cerr << "cm: error connecting service " << qPrintable(path) << "\n";
+					std::cerr << "cm: error connecting service: " 
+										<< qPrintable(crep.error().message()) << "\n";
 					return 1;
 				}
 			} else if (op == "down" || op == "disconnect") {
@@ -121,7 +146,8 @@ int main(int argc, char *argv[])
 				drep.waitForFinished();
 				
 				if (drep.isError()) {
-					std::cerr << "cm: error disconnecting service " << qPrintable(path) << "\n";
+					std::cerr << "cm: error disconnecting service: " 
+										<< qPrintable(drep.error().message()) << "\n";
 					return 1;
 				}
 			} else if (op == "pass" || op == "pwd" || op == "passphrase") {
@@ -130,9 +156,60 @@ int main(int argc, char *argv[])
 				rep.waitForFinished();
 				
 				if (rep.isError()) {
-					std::cerr << "cm: error setting passphrase on " << qPrintable(path) << "\n";
+					std::cerr << "cm: error setting passphrase: " 
+					          << qPrintable(rep.error().message()) << "\n";
 					return 1;
 				}
+			} else if (op == "ipv4" || ipAddr.exactMatch(op) || cidr.exactMatch(op)) {
+				QString ips[3]; // addr mask gw
+				QString method = "manual";
+				int at = 0;
+				
+				for (int i = 2; i < argc; ++i) {
+					QString arg(argv[i]);
+					if (ipAddr.exactMatch(arg)) {
+						ips[at++] = arg;
+					} else if (cidr.exactMatch(arg)) {
+						ips[0] = cidr.cap(1);
+						ips[1] = cidrMask(cidr.cap(2));
+					} else if (arg == "addr" || arg == "address") {
+						QString addr = argv[++i];
+						if (ipAddr.exactMatch(addr)) {
+							ips[0] = addr;
+						} else if (cidr.exactMatch(addr)) {
+							ips[0] = cidr.cap(1);
+							ips[1] = cidrMask(cidr.cap(2));
+						}
+					} else if (arg == "mask" || arg == "netmask") {
+						ips[1] = QString(argv[++i]);
+					} else if (arg == "gw" || arg == "gateway") {
+						ips[2] = QString(argv[++i]);
+					} else if (arg == "dhcp" || arg == "auto") {
+						method = "dhcp";
+					}
+				}
+				
+				QDBusPendingReply<QVariantMap> repl = svc.GetProperties();
+				repl.waitForFinished();
+				QVariantMap props = repl.value();
+				
+				QVariantMap ipv4 = argVarConvert<QVariantMap>(props.value("IPv4.Configuration"));
+				ipv4.insert("Method", QVariant(method));
+				if (!ips[0].isEmpty())
+					ipv4.insert("Address", QVariant(ips[0]));
+				if (!ips[1].isEmpty())
+					ipv4.insert("Netmask", QVariant(ips[1]));
+				if (!ips[2].isEmpty())
+					ipv4.insert("Gateway", QVariant(ips[2]));
+					
+				QDBusPendingReply<> rep = svc.SetProperty("IPv4.Configuration", QDBusVariant(ipv4));
+				rep.waitForFinished();
+				if (rep.isError()) {
+					std::cerr << "cm: error while setting new configuration: "
+										<< qPrintable(rep.error().message()) << "\n";
+					return 1;
+				}
+				
 			} else {
 				std::cerr << "cm: I don't know that operation?\n";
 				return 1;
